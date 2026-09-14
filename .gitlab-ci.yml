@@ -10,11 +10,10 @@ mirror-to-github-oauth:
     - apk add --no-cache curl bash git jq
   script:
     - |
-      # 1. Refresh the user access token
+      # 1. Refresh the user access token (no client_secret needed — device-flow origin)
       RESPONSE=$(curl -s -X POST https://github.com/login/oauth/access_token \
         -H "Accept: application/json" \
         -d "client_id=${GITHUB_OAUTH_CLIENT_ID}" \
-        -d "client_secret=${GITHUB_OAUTH_CLIENT_SECRET}" \
         -d "grant_type=refresh_token" \
         -d "refresh_token=${GITHUB_OAUTH_REFRESH_TOKEN}")
 
