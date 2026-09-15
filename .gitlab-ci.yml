@@ -35,5 +35,5 @@ mirror-to-github-oauth:
       # 3. Persist the NEW refresh token for the next run
       curl -s --request PUT \
         --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-        "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
         --form "value=${NEW_REFRESH_TOKEN}"
