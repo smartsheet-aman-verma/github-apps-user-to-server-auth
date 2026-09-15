@@ -33,7 +33,18 @@ mirror-to-github-oauth:
       git push github-mirror "HEAD:${GITHUB_TARGET_BRANCH}"
 
       # 3. Persist the NEW refresh token for the next run
-      curl -s --request PUT \
+      # curl -s --request PUT \
+      #   --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+      #   "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
+      #   --form "value=${NEW_REFRESH_TOKEN}"
+
+            # 3. Persist the NEW refresh token for the next run
+      WRITE_BACK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --request PUT \
         --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
-        --form "value=${NEW_REFRESH_TOKEN}"
+        --form "value=${NEW_REFRESH_TOKEN}")
+
+      if [ "$WRITE_BACK_STATUS" != "200" ]; then
+        echo "WARNING: failed to persist new refresh token (HTTP $WRITE_BACK_STATUS)."
+        exit 1
+      fi
