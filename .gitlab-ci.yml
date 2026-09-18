@@ -1,6 +1,74 @@
 stages:
+  - validate
   - mirror
 
+# ─────────────────────────────────────────────────────────────
+# Blocks merging into main unless GitLab's main is confirmed
+# in sync with (or safely behind) GitHub's main.
+# Read-only against GitHub - no credentials needed (public repo).
+# ─────────────────────────────────────────────────────────────
+check-github-sync:
+  stage: validate
+  image: alpine:3.20
+  variables:
+    GIT_DEPTH: "0"
+    GIT_STRATEGY: clone
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  before_script:
+    - apk add --no-cache curl bash git jq
+  script:
+    - |
+      # 1. Fetch GitHub's current main - no auth needed, repo is public
+      git fetch "https://github.com/${GITHUB_REPO_PATH}.git" main
+
+      GITHUB_HEAD=$(git rev-parse FETCH_HEAD)
+      GITLAB_MAIN_HEAD=$(git rev-parse "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}")
+
+      echo "GitHub main: $GITHUB_HEAD"
+      echo "GitLab main: $GITLAB_MAIN_HEAD"
+
+      # 2. Case A: GitHub's tip is already known to GitLab -> safe
+      if [ "$GITHUB_HEAD" = "$GITLAB_MAIN_HEAD" ] || git merge-base --is-ancestor "$GITHUB_HEAD" "$GITLAB_MAIN_HEAD"; then
+        echo "GitHub's current commit is already reflected in GitLab. Safe to merge."
+        exit 0
+      fi
+
+      # 3. Case B: GitHub is ahead, clean fast-forward -> auto-sync
+      if git merge-base --is-ancestor "$GITLAB_MAIN_HEAD" "$GITHUB_HEAD"; then
+        echo "GitHub's main has moved ahead of GitLab's. Syncing automatically..."
+        git push "https://oauth2:${GITLAB_SYNC_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
+          "${GITHUB_HEAD}:refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+
+        if [ $? -eq 0 ]; then
+          echo "-----------------------------------------------------------------"
+          echo "GitLab's main has been synced to match GitHub automatically."
+          echo "Your branch was compared against the OLD main before this sync -"
+          echo "please rebase or merge the updated main into your branch, then"
+          echo "re-run this pipeline before merging."
+          echo "-----------------------------------------------------------------"
+          exit 1
+        else
+          echo "-----------------------------------------------------------------"
+          echo "BLOCKED: GitHub is ahead, and the automatic sync failed - likely"
+          echo "a protected-branch permission issue. Please sync manually."
+          echo "-----------------------------------------------------------------"
+          exit 1
+        fi
+      fi
+
+      # 4. Case C: genuine independent divergence -> hard block, no auto-fix
+      echo "-----------------------------------------------------------------"
+      echo "BLOCKED: GitLab and GitHub have diverged independently."
+      echo "Neither branch's history contains the other's latest commit."
+      echo "This needs manual reconciliation before merging safely."
+      echo "-----------------------------------------------------------------"
+      exit 1
+
+# ─────────────────────────────────────────────────────────────
+# Pushes GitLab's main to GitHub after merge, using a GitHub App
+# user access token (OAuth device-flow method).
+# ─────────────────────────────────────────────────────────────
 mirror-to-github-oauth:
   stage: mirror
   image: alpine:3.20
@@ -17,7 +85,6 @@ mirror-to-github-oauth:
         -d "client_secret=${GITHUB_OAUTH_CLIENT_SECRET}" \
         -d "grant_type=refresh_token" \
         -d "refresh_token=${GITHUB_OAUTH_REFRESH_TOKEN}")
-      # ...rest stays the same
 
       ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r .access_token)
       NEW_REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r .refresh_token)
@@ -33,12 +100,6 @@ mirror-to-github-oauth:
       git push github-mirror "HEAD:${GITHUB_TARGET_BRANCH}"
 
       # 3. Persist the NEW refresh token for the next run
-      # curl -s --request PUT \
-      #   --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-      #   "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
-      #   --form "value=${NEW_REFRESH_TOKEN}"
-
-            # 3. Persist the NEW refresh token for the next run
       WRITE_BACK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --request PUT \
         --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/variables/GITHUB_OAUTH_REFRESH_TOKEN" \
